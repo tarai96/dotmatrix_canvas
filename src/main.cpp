@@ -1,4 +1,3 @@
-#include <Arduino.h>
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <Wire.h>
@@ -12,37 +11,35 @@ const char* password = WIFI_PASSWORD;
 AsyncWebServer server(80);
 Adafruit_8x8matrix matrix = Adafruit_8x8matrix();
 
-// ドット（8x8）の状態を保持する配列 (0:消灯, 1:点灯)
-uint8_t ledGrid[8][8] = {0};
+// 各ドットが点灯した時刻（millis）を記録する配列（0は消灯状態）
+unsigned long dotOnTime[8][8] = {0};
 
-// スマホ操作用のHTML/JavaScript（キャンバス操作対応）
+// 消えるまでの時間（ミリ秒）: 1秒 = 1000
+const unsigned long DISPLAY_DURATION = 1000; 
+
+// スマホ操作用のHTML/JavaScript
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <meta charset="utf-8">
-    <title>LED Pad</title>
+    <title>LED Trail Pad</title>
     <style>
         body { text-align: center; font-family: sans-serif; background: #121212; color: white; padding: 20px 10px; user-select: none; touch-action: none; }
-        h1 { font-size: 20px; color: #00E676; margin-bottom: 10px; }
-        .canvas-container { margin: 20px auto; width: 280px; height: 280px; }
+        h1 { font-size: 20px; color: #00E676; margin-bottom: 5px; }
+        p { font-size: 13px; color: #aaa; margin-bottom: 15px; }
+        .canvas-container { margin: 0 auto; width: 280px; height: 280px; }
         canvas { background: #222; border: 4px solid #333; border-radius: 12px; touch-action: none; }
-        .btn-clear {
-            width: 200px; padding: 12px; font-size: 16px; font-weight: bold;
-            border-radius: 8px; border: none; background: #FF5252; color: white; cursor: pointer;
-        }
     </style>
 </head>
 <body>
-    <h1>LED ドットお絵描き</h1>
-    <p style="font-size: 12px; color: #aaa;">画面を指でなぞるとLEDが光ります</p>
+    <h1>LED 軌跡トレーサー</h1>
+    <p>なぞった場所が1秒間だけ光ります</p>
     
     <div class="canvas-container">
         <canvas id="pad" width="280" height="280"></canvas>
     </div>
-
-    <button class="btn-clear" onclick="clearCanvas()">クリア（全部消す）</button>
 
     <script>
         const canvas = document.getElementById('pad');
@@ -50,24 +47,29 @@ const char index_html[] PROGMEM = R"rawliteral(
         const gridSize = 8;
         const cellSize = canvas.width / gridSize;
         let isDrawing = false;
-        let gridState = Array(8).fill().map(() => Array(8).fill(0));
+        
+        // スマホ側でも各セルの最終点灯時刻を記録（描画アニメーション用）
+        let gridTime = Array(8).fill().map(() => Array(8).fill(0));
 
-        // 8x8のグリッド描画
         function drawGrid() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const now = Date.now();
+
             for (let x = 0; x < gridSize; x++) {
                 for (let y = 0; y < gridSize; y++) {
                     ctx.strokeStyle = '#333';
                     ctx.strokeRect(x * cellSize, y * cellSize, cellSize, cellSize);
-                    if (gridState[x][y] === 1) {
+
+                    // 点灯してから1秒未満のセルを描画
+                    if (now - gridTime[x][y] < 1000) {
                         ctx.fillStyle = '#00E676';
                         ctx.fillRect(x * cellSize + 2, y * cellSize + 2, cellSize - 4, cellSize - 4);
                     }
                 }
             }
+            requestAnimationFrame(drawGrid); // スマホ画面上でも残像アニメーションを更新
         }
 
-        // 指やマウスの座標から8x8セルを特定して点灯
         function handlePointer(e) {
             const rect = canvas.getBoundingClientRect();
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -77,26 +79,15 @@ const char index_html[] PROGMEM = R"rawliteral(
             const y = Math.floor((clientY - rect.top) / cellSize);
 
             if (x >= 0 && x < 8 && y >= 0 && y < 8) {
-                if (gridState[x][y] !== 1) {
-                    gridState[x][y] = 1;
-                    drawGrid();
-                    sendDot(x, y, 1);
+                const now = Date.now();
+                // 100ms以上経っているか、初めて触れたセルならESP32へ送る
+                if (now - gridTime[x][y] > 100) {
+                    gridTime[x][y] = now;
+                    fetch(`/draw?x=${x}&y=${y}`);
                 }
             }
         }
 
-        // ESP32へ点灯したドットの座標を送る (Fetch API)
-        function sendDot(x, y, state) {
-            fetch(`/draw?x=${x}&y=${y}&state=${state}`);
-        }
-
-        function clearCanvas() {
-            gridState = Array(8).fill().map(() => Array(8).fill(0));
-            drawGrid();
-            fetch('/clear');
-        }
-
-        // イベントリスナー（タッチ・マウス両対応）
         canvas.addEventListener('pointerdown', (e) => { isDrawing = true; handlePointer(e); });
         canvas.addEventListener('pointermove', (e) => { if (isDrawing) handlePointer(e); });
         window.addEventListener('pointerup', () => { isDrawing = false; });
@@ -107,18 +98,23 @@ const char index_html[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
-// ドットマトリクスの表示更新（上下反転の補正適用）
+// ドットマトリクスの表示更新関数
 void updateDisplay() {
     matrix.clear();
+    unsigned long now = millis();
+
+    // 1秒以内に点灯指定されたドットだけをONにする
     for (int x = 0; x < 8; x++) {
         for (int y = 0; y < 8; y++) {
-            if (ledGrid[x][y] == 1) {
+            if (dotOnTime[x][y] > 0 && (now - dotOnTime[x][y] < DISPLAY_DURATION)) {
                 matrix.drawPixel(x, y, LED_ON);
+            } else if (dotOnTime[x][y] > 0) {
+                dotOnTime[x][y] = 0; // 1秒過ぎたら消灯データとしてリセット
             }
         }
     }
 
-    // 前回調整した「上下反転」補正処理
+    // 上下反転補正処理
     for (int x = 0; x < 8; x++) {
         uint8_t originalLine = matrix.displaybuffer[x];
         uint8_t reversedLine = 0;
@@ -154,25 +150,16 @@ void setup() {
         request->send_P(200, "text/html", index_html);
     });
 
-    // ドット点灯リクエストのリレー (/draw?x=0&y=0&state=1)
+    // 座標の受信処理（触れた時刻を記録）
     server.on("/draw", HTTP_GET, [](AsyncWebServerRequest *request){
-        if (request->hasParam("x") && request->hasParam("y") && request->hasParam("state")) {
+        if (request->hasParam("x") && request->hasParam("y")) {
             int x = request->getParam("x")->value().toInt();
             int y = request->getParam("y")->value().toInt();
-            int state = request->getParam("state")->value().toInt();
 
             if (x >= 0 && x < 8 && y >= 0 && y < 8) {
-                ledGrid[x][y] = state;
-                updateDisplay();
+                dotOnTime[x][y] = millis(); // 現在の時刻を保存
             }
         }
-        request->send(200, "text/plain", "OK");
-    });
-
-    // クリアリクエスト (/clear)
-    server.on("/clear", HTTP_GET, [](AsyncWebServerRequest *request){
-        memset(ledGrid, 0, sizeof(ledGrid));
-        updateDisplay();
         request->send(200, "text/plain", "OK");
     });
 
@@ -180,5 +167,7 @@ void setup() {
 }
 
 void loop() {
-    // 非同期Webサーバーのため空でOKです
+    // 常に時間の経過をチェックして、1秒経過したドットを消去・再描画
+    updateDisplay();
+    delay(20); // 画面更新間隔（約50FPS）
 }
