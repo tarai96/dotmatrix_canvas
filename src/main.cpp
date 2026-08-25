@@ -15,19 +15,20 @@ const char* mqtt_server = "broker.hivemq.com";
 const int   mqtt_port   = 1883;
 
 // ★ユニークなトピック名を指定（他者と衝突しないよう適宜変更してください）
-const char* mqtt_topic  = "esp32/ledpad/draw/anatasikamienaino_12345";
+const char* mqtt_topic  = "esp32/ledpad/draw/anatasikamienaino";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
-Adafruit_8x8matrix matrix = Adafruit_8x8matrix();
 
-// 点灯時刻記録（1秒後に自動消灯）
-unsigned long dotOnTime[8][8] = {0};
-const unsigned long DISPLAY_DURATION = 1000; 
+// 8x16 ドットマトリクス用オブジェクト
+Adafruit_8x16matrix matrix = Adafruit_8x16matrix();
+
+// 点灯時刻記録用配列 (横16 × 縦8)
+unsigned long dotOnTime[16][8] = {0};
+const unsigned long DISPLAY_DURATION = 1000; // 1秒間点灯
 
 // MQTTメッセージ受信用コールバック関数
 void callback(char* topic, byte* payload, unsigned int length) {
-    // 届いたデータ（例: "3,5"）をパース
     char message[16] = {0};
     for (int i = 0; i < length && i < 15; i++) {
         message[i] = (char)payload[i];
@@ -35,13 +36,16 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
     int x = -1, y = -1;
     if (sscanf(message, "%d,%d", &x, &y) == 2) {
-        if (x >= 0 && x < 8 && y >= 0 && y < 8) {
-            dotOnTime[x][y] = millis(); // 受信時刻を記録
+        // x座標の範囲チェックを 0〜15 に拡張
+        if (x >= 0 && x < 16 && y >= 0 && y < 8) {
+            dotOnTime[x][y] = millis();
+            Serial.print("("); Serial.print(x);
+            Serial.print(","); Serial.print(y);
+            Serial.println(")");
         }
     }
 }
 
-// MQTTサーバーへの再接続処理
 void reconnectMQTT() {
     while (!client.connected()) {
         Serial.print("Attempting MQTT connection...");
@@ -49,7 +53,7 @@ void reconnectMQTT() {
         
         if (client.connect(clientId.c_str())) {
             Serial.println("connected");
-            client.subscribe(mqtt_topic); // トピックの購読開始
+            client.subscribe(mqtt_topic);
         } else {
             Serial.print("failed, rc=");
             Serial.print(client.state());
@@ -59,43 +63,38 @@ void reconnectMQTT() {
     }
 }
 
-// 表示更新（上下反転補正付き）
+// 画面描画処理（8x16対応 ＆ 確実な上下反転補正）
 void updateDisplay() {
     matrix.clear();
     unsigned long now = millis();
 
-    for (int x = 0; x < 8; x++) {
+    for (int x = 0; x < 16; x++) {
         for (int y = 0; y < 8; y++) {
             if (dotOnTime[x][y] > 0 && (now - dotOnTime[x][y] < DISPLAY_DURATION)) {
-                matrix.drawPixel(x, y, LED_ON);
+                // Y座標を「7 - y」にすることで、直接上下を反転させて描画します
+                matrix.drawPixel(x, 7 - y, LED_ON);
+                //matrix.drawPixel(x, y, LED_ON);
             } else if (dotOnTime[x][y] > 0) {
                 dotOnTime[x][y] = 0;
             }
         }
     }
 
-    // 上下反転補正処理
-    for (int x = 0; x < 8; x++) {
-        uint8_t originalLine = matrix.displaybuffer[x];
-        uint8_t reversedLine = 0;
-        for (int b = 0; b < 8; b++) {
-            if (originalLine & (1 << b)) {
-                reversedLine |= (1 << (7 - b));
-            }
-        }
-        matrix.displaybuffer[x] = reversedLine;
-    }
-
+    // ディスプレイバッファへの直接操作（ループ処理）は不要になります
     matrix.writeDisplay();
 }
 
 void setup() {
     Serial.begin(115200);
 
+    // 8x16ドットマトリクス初期化
     matrix.begin(0x70);
+    matrix.setRotation(1);
     matrix.setBrightness(2);
     matrix.clear();
     matrix.writeDisplay();
+
+    Serial.println(matrix.getRotation());
 
     WiFi.begin(ssid, password);
     while (WiFi.status() != WL_CONNECTED) {
@@ -104,7 +103,6 @@ void setup() {
     }
     Serial.println("\nWi-Fi Connected!");
 
-    // MQTTサーバー設定
     client.setServer(mqtt_server, mqtt_port);
     client.setCallback(callback);
 }
@@ -113,8 +111,8 @@ void loop() {
     if (!client.connected()) {
         reconnectMQTT();
     }
-    client.loop(); // MQTT通信の維持・受信チェック
+    client.loop();
 
-    updateDisplay(); // 1秒経過チェック & 描画更新
+    updateDisplay();
     delay(20);
 }
