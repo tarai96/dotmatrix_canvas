@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta charset="utf-8">
+    <title>MQTT LED Pad</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+    <style>
+        body { text-align: center; font-family: sans-serif; background: #121212; color: white; padding: 20px 10px; user-select: none; touch-action: none; }
+        h1 { font-size: 20px; color: #00E676; margin-bottom: 5px; }
+        p { font-size: 13px; color: #aaa; margin-bottom: 15px; }
+        .canvas-container { margin: 0 auto; width: 280px; height: 280px; }
+        canvas { background: #222; border: 4px solid #333; border-radius: 12px; touch-action: none; }
+        #status { margin-top: 15px; font-size: 12px; color: #888; }
+    </style>
+</head>
+<body>
+    <h1>MQTT 軌跡Pad</h1>
+    <p>キャリア回線(4G/5G)から操作可能</p>
+    
+    <div class="canvas-container">
+        <canvas id="pad" width="280" height="280"></canvas>
+    </div>
+    <div id="status">MQTT接続中...</div>
+
+    <script>
+        const topic = "esp32/ledpad/draw/anatasikamienaino_12345"; // ESP32側のトピックと合わせる
+        const client = new Paho.MQTT.Client("broker.hivemq.com", 8000, "web_" + parseInt(Math.random() * 100000));
+
+        client.onConnectionLost = onConnectionLost;
+        client.connect({ onSuccess: onConnect });
+
+        function onConnect() {
+            document.getElementById("status").innerText = "接続完了！なぞってください";
+            document.getElementById("status").style.color = "#00E676";
+        }
+
+        function onConnectionLost(responseObject) {
+            document.getElementById("status").innerText = "接続が切れました。再接続中...";
+            document.getElementById("status").style.color = "#FF5252";
+            setTimeout(() => client.connect({ onSuccess: onConnect }), 2000);
+        }
+
+        // キャンバス描画処理
+        const canvas = document.getElementById('pad');
+        const ctx = canvas.getContext('2d');
+        const gridSize = 8;
+        const cellSize = canvas.width / gridSize;
+        let isDrawing = false;
+        let gridTime = Array(8).fill().map(() => Array(8).fill(0));
+
+        function drawGrid() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const now = Date.now();
+
+            for (let x = 0; x < gridSize; x++) {
+                for (let y = 0; y < gridSize; y++) {
+                    ctx.strokeStyle = '#333';
+                    ctx.strokeRect(x * cellSize, y * cellSize, cellSize, cellSize);
+
+                    if (now - gridTime[x][y] < 1000) {
+                        ctx.fillStyle = '#00E676';
+                        ctx.fillRect(x * cellSize + 2, y * cellSize + 2, cellSize - 4, cellSize - 4);
+                    }
+                }
+            }
+            requestAnimationFrame(drawGrid);
+        }
+
+        function handlePointer(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+            const x = Math.floor((clientX - rect.left) / cellSize);
+            const y = Math.floor((clientY - rect.top) / cellSize);
+
+            if (x >= 0 && x < 8 && y >= 0 && y < 8) {
+                const now = Date.now();
+                if (now - gridTime[x][y] > 100) {
+                    gridTime[x][y] = now;
+                    sendMQTT(`${x},${y}`);
+                }
+            }
+        }
+
+        function sendMQTT(payload) {
+            if (client.isConnected()) {
+                const message = new Paho.MQTT.Message(payload);
+                message.destinationName = topic;
+                client.send(message);
+            }
+        }
+
+        canvas.addEventListener('pointerdown', (e) => { isDrawing = true; handlePointer(e); });
+        canvas.addEventListener('pointermove', (e) => { if (isDrawing) handlePointer(e); });
+        window.addEventListener('pointerup', () => { isDrawing = false; });
+
+        drawGrid();
+    </script>
+</body>
+</html>
