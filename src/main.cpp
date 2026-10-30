@@ -71,9 +71,9 @@ void updateDisplay() {
     for (int x = 0; x < 16; x++) {
         for (int y = 0; y < 8; y++) {
             if (dotOnTime[x][y] > 0 && (now - dotOnTime[x][y] < DISPLAY_DURATION)) {
-                // Y座標を「7 - y」にすることで、直接上下を反転させて描画します
-                matrix.drawPixel(x, 7 - y, LED_ON);
-                //matrix.drawPixel(x, y, LED_ON);
+                // X座標を「15 - x」にして左右を反転させて描画します
+                // （上下は元の「7 - y」をやめて y のままにすることで反転）
+                matrix.drawPixel(15 - x, y, LED_ON);
             } else if (dotOnTime[x][y] > 0) {
                 dotOnTime[x][y] = 0;
             }
