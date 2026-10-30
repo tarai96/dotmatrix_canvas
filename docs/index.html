@@ -7,17 +7,15 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
     <style>
         body { text-align: center; font-family: sans-serif; background: #121212; color: white; padding: 20px 10px; user-select: none; touch-action: none; }
-        h1 { font-size: 20px; color: #00E676; margin-bottom: 5px; }
-        p { font-size: 13px; color: #aaa; margin-bottom: 15px; }
-        .canvas-container { margin: 0 auto; width: 328px; height: 168px; }
+        h1 { font-size: 20px; color: #00E676; margin-bottom: 15px; }
+        .canvas-container { margin: 0 auto; width: 328px; height: 328px; }
         canvas { background: #222; border: 4px solid #333; border-radius: 12px; touch-action: none; }
         #status { margin-top: 15px; font-size: 12px; color: #888; }
     </style>
 </head>
 <body>
-    <h1>MQTT 軌跡Pad</h1>
-    <p>キャリア回線(4G/5G)から操作可能</p>
-    
+    <h1>LED Pad</h1>
+
     <div class="canvas-container">
         <canvas id="pad" width="320" height="320"></canvas>
     </div>
@@ -25,10 +23,12 @@
 
     <script>
         const topic = "esp32/ledpad/draw/anatasikamienaino"; // ESP32側のトピックと合わせる
-        const client = new Paho.MQTT.Client("broker.hivemq.com", 8000, "web_" + parseInt(Math.random() * 100000));
+        // https のページ（GitHub Pages）からは暗号化された接続(wss)しか使えないので 8884 + SSL で接続
+        const client = new Paho.MQTT.Client("broker.hivemq.com", 8884, "web_" + parseInt(Math.random() * 100000));
+        const connectOptions = { useSSL: true, onSuccess: onConnect, onFailure: onConnectionLost };
 
         client.onConnectionLost = onConnectionLost;
-        client.connect({ onSuccess: onConnect });
+        client.connect(connectOptions);
 
         function onConnect() {
             document.getElementById("status").innerText = "接続完了！なぞってください";
@@ -38,7 +38,7 @@
         function onConnectionLost(responseObject) {
             document.getElementById("status").innerText = "接続が切れました。再接続中...";
             document.getElementById("status").style.color = "#FF5252";
-            setTimeout(() => client.connect({ onSuccess: onConnect }), 2000);
+            setTimeout(() => client.connect(connectOptions), 2000);
         }
 
         // キャンバス描画処理
