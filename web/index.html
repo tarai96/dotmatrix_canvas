@@ -19,7 +19,7 @@
     <p>キャリア回線(4G/5G)から操作可能</p>
     
     <div class="canvas-container">
-        <canvas id="pad" width="320" height="160"></canvas>
+        <canvas id="pad" width="320" height="320"></canvas>
     </div>
     <div id="status">MQTT接続中...</div>
 
@@ -45,7 +45,7 @@
         const canvas = document.getElementById('pad');
         const ctx = canvas.getContext('2d');
         const cols = 16; // 横16
-        const rows = 8;  // 縦8
+        const rows = 16;  // 縦16
         const cellSize = canvas.width / cols;
         let isDrawing = false;
         let gridTime = Array(cols).fill().map(() => Array(rows).fill(0));

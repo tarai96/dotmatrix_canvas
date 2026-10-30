@@ -21,10 +21,11 @@ WiFiClient espClient;
 PubSubClient client(espClient);
 
 // 8x16 ドットマトリクス用オブジェクト
-Adafruit_8x16matrix matrix = Adafruit_8x16matrix();
+Adafruit_8x16matrix top = Adafruit_8x16matrix();
+Adafruit_8x16matrix bottom = Adafruit_8x16matrix();
 
-// 点灯時刻記録用配列 (横16 × 縦8)
-unsigned long dotOnTime[16][8] = {0};
+// 点灯時刻記録用配列 (横16 × 縦16)
+unsigned long dotOnTime[16][16] = {0};
 const unsigned long DISPLAY_DURATION = 1000; // 1秒間点灯
 
 // MQTTメッセージ受信用コールバック関数
@@ -37,7 +38,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     int x = -1, y = -1;
     if (sscanf(message, "%d,%d", &x, &y) == 2) {
         // x座標の範囲チェックを 0〜15 に拡張
-        if (x >= 0 && x < 16 && y >= 0 && y < 8) {
+        if (x >= 0 && x < 16 && y >= 0 && y < 16) {
             dotOnTime[x][y] = millis();
             Serial.print("("); Serial.print(x);
             Serial.print(","); Serial.print(y);
@@ -65,15 +66,20 @@ void reconnectMQTT() {
 
 // 画面描画処理（8x16対応 ＆ 確実な上下反転補正）
 void updateDisplay() {
-    matrix.clear();
+    top.clear();
+    bottom.clear();
     unsigned long now = millis();
 
     for (int x = 0; x < 16; x++) {
-        for (int y = 0; y < 8; y++) {
+        for (int y = 0; y < 16; y++) {
             if (dotOnTime[x][y] > 0 && (now - dotOnTime[x][y] < DISPLAY_DURATION)) {
                 // X座標を「15 - x」にして左右を反転させて描画します
                 // （上下は元の「7 - y」をやめて y のままにすることで反転）
-                matrix.drawPixel(15 - x, y, LED_ON);
+                if(y < 8){
+                    top.drawPixel(15-x, y, LED_ON);
+                }else{
+                    bottom.drawPixel(15-x, y-8, LED_ON);
+                }
             } else if (dotOnTime[x][y] > 0) {
                 dotOnTime[x][y] = 0;
             }
@@ -81,20 +87,24 @@ void updateDisplay() {
     }
 
     // ディスプレイバッファへの直接操作（ループ処理）は不要になります
-    matrix.writeDisplay();
+    top.writeDisplay();
+    bottom.writeDisplay();
 }
 
 void setup() {
     Serial.begin(115200);
 
     // 8x16ドットマトリクス初期化
-    matrix.begin(0x70);
-    matrix.setRotation(1);
-    matrix.setBrightness(2);
-    matrix.clear();
-    matrix.writeDisplay();
-
-    Serial.println(matrix.getRotation());
+    top.begin(0x70);
+    top.setRotation(1);
+    top.setBrightness(2);
+    top.clear();
+    top.writeDisplay();
+    bottom.begin(0x71);
+    bottom.setRotation(1);
+    bottom.setBrightness(2);
+    bottom.clear();
+    bottom.writeDisplay();
 
     WiFi.begin(ssid, password);
     while (WiFi.status() != WL_CONNECTED) {
