@@ -28,7 +28,19 @@ Adafruit_8x16matrix bottom = Adafruit_8x16matrix();
 unsigned long dotOnTime[16][16] = {0};
 const unsigned long DISPLAY_DURATION = 1000; // 1秒間点灯
 
+// お絵描きモードで描いた点（消すまで点灯し続ける）
+bool drawn[16][16] = {false};
+
+bool inRange(int x, int y) {
+    return x >= 0 && x < 16 && y >= 0 && y < 16;
+}
+
 // MQTTメッセージ受信用コールバック関数
+// 受け取るメッセージ:
+//   "x,y"   軌跡モード（1秒で消える）
+//   "d,x,y" お絵描きモード（消すまで残る）
+//   "e,x,y" 消しゴム
+//   "c"     全部消す
 void callback(char* topic, byte* payload, unsigned int length) {
     char message[16] = {0};
     for (int i = 0; i < length && i < 15; i++) {
@@ -36,9 +48,16 @@ void callback(char* topic, byte* payload, unsigned int length) {
     }
 
     int x = -1, y = -1;
-    if (sscanf(message, "%d,%d", &x, &y) == 2) {
-        // x座標の範囲チェックを 0〜15 に拡張
-        if (x >= 0 && x < 16 && y >= 0 && y < 16) {
+    if (strcmp(message, "c") == 0) {
+        memset(drawn, 0, sizeof(drawn));
+        memset(dotOnTime, 0, sizeof(dotOnTime));
+        Serial.println("clear");
+    } else if (sscanf(message, "d,%d,%d", &x, &y) == 2) {
+        if (inRange(x, y)) drawn[x][y] = true;
+    } else if (sscanf(message, "e,%d,%d", &x, &y) == 2) {
+        if (inRange(x, y)) drawn[x][y] = false;
+    } else if (sscanf(message, "%d,%d", &x, &y) == 2) {
+        if (inRange(x, y)) {
             dotOnTime[x][y] = millis();
             Serial.print("("); Serial.print(x);
             Serial.print(","); Serial.print(y);
@@ -72,7 +91,13 @@ void updateDisplay() {
 
     for (int x = 0; x < 16; x++) {
         for (int y = 0; y < 16; y++) {
-            if (dotOnTime[x][y] > 0 && (now - dotOnTime[x][y] < DISPLAY_DURATION)) {
+            bool trailOn = dotOnTime[x][y] > 0 && (now - dotOnTime[x][y] < DISPLAY_DURATION);
+            if (!trailOn && dotOnTime[x][y] > 0) {
+                dotOnTime[x][y] = 0;
+            }
+
+            // 軌跡の点か、お絵描きで描いた点なら点灯
+            if (trailOn || drawn[x][y]) {
                 // X座標を「15 - x」にして左右を反転させて描画します
                 // （上下は元の「7 - y」をやめて y のままにすることで反転）
                 if(y < 8){
@@ -80,8 +105,6 @@ void updateDisplay() {
                 }else{
                     bottom.drawPixel(15-x, y-8, LED_ON);
                 }
-            } else if (dotOnTime[x][y] > 0) {
-                dotOnTime[x][y] = 0;
             }
         }
     }

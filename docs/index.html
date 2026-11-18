@@ -11,14 +11,25 @@
         .canvas-container { margin: 0 auto; width: 328px; height: 328px; }
         canvas { background: #222; border: 4px solid #333; border-radius: 12px; touch-action: none; }
         #status { margin-top: 15px; font-size: 12px; color: #888; }
+        .modes { margin-bottom: 12px; display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; }
+        .modes button { background: #222; color: #ccc; border: 2px solid #333; border-radius: 8px; padding: 8px 12px; font-size: 14px; }
+        .modes button.active { border-color: #00E676; color: #00E676; }
+        #clear { margin-top: 12px; background: #222; color: #FF5252; border: 2px solid #333; border-radius: 8px; padding: 8px 16px; font-size: 14px; }
     </style>
 </head>
 <body>
     <h1>LED Pad</h1>
 
+    <div class="modes">
+        <button data-mode="trail" class="active">軌跡</button>
+        <button data-mode="draw">お絵描き</button>
+        <button data-mode="erase">消しゴム</button>
+    </div>
+
     <div class="canvas-container">
         <canvas id="pad" width="320" height="320"></canvas>
     </div>
+    <button id="clear">全部消す</button>
     <div id="status">MQTT接続中...</div>
 
     <script>
@@ -31,7 +42,7 @@
         client.connect(connectOptions);
 
         function onConnect() {
-            document.getElementById("status").innerText = "接続完了！なぞってください";
+            document.getElementById("status").innerText = "接続完了！";
             document.getElementById("status").style.color = "#00E676";
         }
 
@@ -48,7 +59,24 @@
         const rows = 16;  // 縦16
         const cellSize = canvas.width / cols;
         let isDrawing = false;
+        let mode = 'trail'; // 'trail'（軌跡） / 'draw'（お絵描き） / 'erase'（消しゴム）
         let gridTime = Array(cols).fill().map(() => Array(rows).fill(0));
+        let drawn = Array(cols).fill().map(() => Array(rows).fill(false));
+
+        // モード切り替えボタン
+        document.querySelectorAll('.modes button').forEach(btn => {
+            btn.addEventListener('click', () => {
+                mode = btn.dataset.mode;
+                document.querySelectorAll('.modes button').forEach(b => b.classList.toggle('active', b === btn));
+            });
+        });
+
+        // 全部消す
+        document.getElementById('clear').addEventListener('click', () => {
+            drawn = Array(cols).fill().map(() => Array(rows).fill(false));
+            gridTime = Array(cols).fill().map(() => Array(rows).fill(0));
+            sendMQTT('c');
+        });
 
         function drawGrid() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -59,7 +87,7 @@
                     ctx.strokeStyle = '#333';
                     ctx.strokeRect(x * cellSize, y * cellSize, cellSize, cellSize);
 
-                    if (now - gridTime[x][y] < 1000) {
+                    if (drawn[x][y] || now - gridTime[x][y] < 1000) {
                         ctx.fillStyle = '#00E676';
                         ctx.fillRect(x * cellSize + 2, y * cellSize + 2, cellSize - 4, cellSize - 4);
                     }
@@ -77,7 +105,20 @@
             const x = Math.floor((clientX - rect.left - canvas.clientLeft) / cellSize);
             const y = Math.floor((clientY - rect.top - canvas.clientTop) / cellSize);
 
-            if (x >= 0 && x < cols && y >= 0 && y < rows) {
+            if (x < 0 || x >= cols || y < 0 || y >= rows) return;
+
+            if (mode === 'draw') {
+                // すでに描いてあるマスは送り直さない
+                if (!drawn[x][y]) {
+                    drawn[x][y] = true;
+                    sendMQTT(`d,${x},${y}`);
+                }
+            } else if (mode === 'erase') {
+                if (drawn[x][y]) {
+                    drawn[x][y] = false;
+                    sendMQTT(`e,${x},${y}`);
+                }
+            } else {
                 const now = Date.now();
                 if (now - gridTime[x][y] > 100) {
                     gridTime[x][y] = now;
