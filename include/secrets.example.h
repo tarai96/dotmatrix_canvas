@@ -4,3 +4,7 @@
 
 #define WIFI_SSID     "your-ssid"
 #define WIFI_PASSWORD "your-password"
+
+// PEAP + MSCHAPv2 方式用
+#define TKU_ID       "your-id"       // ID
+#define TKU_PASSWORD "your-password"   // パスワード

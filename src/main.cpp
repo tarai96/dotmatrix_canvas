@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <PubSubClient.h>
+#include <WebSocketsClient.h>  // MQTTPubSubClient.h より先に include する
+#include <MQTTPubSubClient.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_LEDBackpack.h>
@@ -11,14 +12,16 @@ const char* ssid     = WIFI_SSID;
 const char* password = WIFI_PASSWORD;
 
 // MQTTブローカー設定（パブリックブローカーを利用）
+// 学校Wi-Fiでは 1883 番がふさがれているので、ブラウザと同じ wss(8884) で接続する
 const char* mqtt_server = "broker.hivemq.com";
-const int   mqtt_port   = 1883;
+const int   mqtt_port   = 8884;
+const char* mqtt_path   = "/mqtt";
 
 // ★ユニークなトピック名を指定（他者と衝突しないよう適宜変更してください）
 const char* mqtt_topic  = "esp32/ledpad/draw/anatasikamienaino";
 
-WiFiClient espClient;
-PubSubClient client(espClient);
+WebSocketsClient wsClient;
+MQTTPubSubClient mqtt;
 
 // 8x16 ドットマトリクス用オブジェクト
 Adafruit_8x16matrix top = Adafruit_8x16matrix();
@@ -41,11 +44,9 @@ bool inRange(int x, int y) {
 //   "d,x,y" お絵描きモード（消すまで残る）
 //   "e,x,y" 消しゴム
 //   "c"     全部消す
-void callback(char* topic, byte* payload, unsigned int length) {
+void callback(const String& payload, const size_t size) {
     char message[16] = {0};
-    for (int i = 0; i < length && i < 15; i++) {
-        message[i] = (char)payload[i];
-    }
+    strncpy(message, payload.c_str(), sizeof(message) - 1);
 
     int x = -1, y = -1;
     if (strcmp(message, "c") == 0) {
@@ -67,20 +68,27 @@ void callback(char* topic, byte* payload, unsigned int length) {
 }
 
 void reconnectMQTT() {
-    while (!client.connected()) {
-        Serial.print("Attempting MQTT connection...");
-        String clientId = "ESP32Client-" + String(random(0xffff), HEX);
-        
-        if (client.connect(clientId.c_str())) {
-            Serial.println("connected");
-            client.subscribe(mqtt_topic);
-        } else {
-            Serial.print("failed, rc=");
-            Serial.print(client.state());
-            Serial.println(" try again in 2 seconds");
-            delay(2000);
+connect_to_host:
+    // WebSocket(wss)でブローカーに接続（"mqtt" はサブプロトコル名で必須）
+    Serial.println("Connecting to WebSocket...");
+    wsClient.disconnect();
+    wsClient.beginSSL(mqtt_server, mqtt_port, mqtt_path, "", "mqtt");
+    wsClient.setReconnectInterval(2000);
+
+    Serial.print("Attempting MQTT connection...");
+    String clientId = "ESP32Client-" + String(random(0xffff), HEX);
+    while (!mqtt.connect(clientId)) {
+        Serial.print(".");
+        delay(1000);
+        if (!wsClient.isConnected()) {
+            Serial.println(" WebSocket disconnected, retrying");
+            goto connect_to_host;
         }
     }
+    Serial.println(" connected");
+
+    // 再接続のたびに購読し直す（クリーンセッションなので切断で購読が消える）
+    mqtt.subscribe(mqtt_topic, callback);
 }
 
 // 画面描画処理（8x16対応 ＆ 確実な上下反転補正）
@@ -130,21 +138,28 @@ void setup() {
     bottom.writeDisplay();
 
     WiFi.begin(ssid, password);
+
+    /*
+    // 学校Wi-Fi（WPA2-Enterprise / PEAP）
+    WiFi.begin("TKU-NET-WiFi2", WPA2_AUTH_PEAP,
+           TKU_ID,        // 匿名ID
+           TKU_ID,        // ID
+           TKU_PASSWORD); // パスワード
+    */
     while (WiFi.status() != WL_CONNECTED) {
         delay(500);
         Serial.print(".");
     }
     Serial.println("\nWi-Fi Connected!");
 
-    client.setServer(mqtt_server, mqtt_port);
-    client.setCallback(callback);
+    mqtt.begin(wsClient);
 }
 
 void loop() {
-    if (!client.connected()) {
+    mqtt.update(); // MQTT通信の維持・受信チェック
+    if (!mqtt.isConnected()) {
         reconnectMQTT();
     }
-    client.loop();
 
     updateDisplay();
     delay(20);
